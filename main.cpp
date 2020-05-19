@@ -41,7 +41,55 @@ void line(int x0, int y0, int x1, int y1, TGAImage &image, const TGAColor &color
     }
 }
 
-void triangle(Vec2i t0, Vec2i t1, Vec2i t2, TGAImage &image, const TGAColor &color) { 
+Vec3f barycentric(Vec3f A, Vec3f B, Vec3f C, Vec2f P) {
+    Vec3f s1 (C.x-A.x, B.x-A.x, A.x-P.x);
+    Vec3f s2 (C.y-A.y, B.y-A.y, A.y-P.y);
+
+
+    Vec3f u = cross(s1, s2);
+    if (std::abs(u.z)>1e-2)
+        return Vec3f(1.f-(u.x+u.y)/u.z, u.y/u.z, u.x/u.z);
+    return Vec3f(-1,1,1); // in this case generate negative coordinates, it will be thrown away by the rasterizator
+}
+
+
+void triangle3D(Vec3f v1, Vec3f v2, Vec3f v3, float *zbuffer, TGAImage &image, TGAColor color) {
+    
+    Vec2f bboxMin = Vec2f(
+        min(v1.x, min(v2.x, v3.x)),
+        min(v1.y, min(v2.y, v3.y))
+    );
+    Vec2f bboxMax = Vec2f(
+        max(v1.x, max(v2.x, v3.x)),
+        max(v1.y, max(v2.y, v3.y))
+    );
+
+    for (int x = bboxMin.x; x <= bboxMax.x; x++) {
+        for (int y = bboxMin.y; y <= bboxMax.y; y++) {
+            Vec2f point2D = Vec2f(x, y);
+            Vec3f barycentricCoords = barycentric(v1, v2, v3, point2D);
+            
+            if (barycentricCoords.x < 0 || barycentricCoords.y < 0 || barycentricCoords.z < 0)
+                continue;
+
+            float zValue = barycentricCoords.x * v1.z
+                + barycentricCoords.y * v2.z
+                + barycentricCoords.z * v3.z;
+            
+            int xIndexInZBuffer = point2D.x;
+            int yIndexInZBuffer = point2D.y * width;
+
+            if (zbuffer[xIndexInZBuffer + yIndexInZBuffer] > zValue)
+                continue;
+
+            zbuffer[xIndexInZBuffer + yIndexInZBuffer] = zValue;
+            image.set(point2D.x, point2D.y, color);
+        }
+    }
+
+}
+
+void triangle2D(Vec2i t0, Vec2i t1, Vec2i t2, TGAImage &image, const TGAColor &color) { 
     if (t0.y > t1.y) swap(t0, t1);
     if (t0.y > t2.y) swap(t0, t2);
     if (t1.y > t2.y) swap(t1, t2);
@@ -93,7 +141,7 @@ void printFaceInLines(TGAImage &image, Model* model) {
     }
 }
 
-void printFaceInTringles(TGAImage &image, Model* model) {
+void printFaceInTringles2D(TGAImage &image, Model* model) {
     Vec3f light_dir(0,0,-1);
         for (int i=0; i<model->nfaces(); i++) { 
         std::vector<int> face = model->face(i); 
@@ -104,12 +152,28 @@ void printFaceInTringles(TGAImage &image, Model* model) {
             screen_coords[j] = Vec2i((v.x+1.)*width/2., (v.y+1.)*height/2.); 
             world_coords[j]  = v; 
         } 
-        Vec3f n = (world_coords[2]-world_coords[0])^(world_coords[1]-world_coords[0]); 
+        Vec3f n;// = (world_coords[2]-world_coords[0])^(world_coords[1]-world_coords[0]); 
         n.normalize(); 
         float intensity = n*light_dir; 
         if (intensity>0) { 
-            triangle(screen_coords[0], screen_coords[1], screen_coords[2], image, TGAColor(intensity*255, intensity*255, intensity*255, 255)); 
+            triangle2D(screen_coords[0], screen_coords[1], screen_coords[2], image, TGAColor(intensity*255, intensity*255, intensity*255, 255)); 
         } 
+    }
+}
+
+
+Vec3f world2screen(Vec3f v) {
+    return Vec3f(int((v.x+1.)*width/2.+.5), int((v.y+1.)*height/2.+.5), v.z);
+}
+void printFaceInTringles3D(TGAImage &image, Model* model) {
+    float *zbuffer = new float[width*height];
+    for (int i=width*height; i--; zbuffer[i] = -std::numeric_limits<float>::max());
+
+    for (int i=0; i<model->nfaces(); i++) {
+        std::vector<int> face = model->face(i);
+        Vec3f pts[3];
+        for (int i=0; i<3; i++) pts[i] = world2screen(model->vert(face[i]));
+        triangle3D(pts[0], pts[1], pts[2], zbuffer, image, TGAColor(rand()%255, rand()%255, rand()%255, 255));
     }
 }
 
@@ -117,15 +181,16 @@ int main(int argc, char** argv) {
     if (2==argc) {
         model = new Model(argv[1]);
     } else {
-        model = new Model("obj/african_head.obj");
+        model = new Model("obj/african_head/african_head.obj");
     }
 
     TGAImage image(width, height, TGAImage::RGB);
-    //triangle(Vec2i(0,0), Vec2i(100, 200), Vec2i(200, 100), image, white);
+    // triangle(Vec2i(0,0), Vec2i(100, 200), Vec2i(200, 100), image, white);
 
-    //printFaceInLines(image, model);
-    printFaceInTringles(image, model);
-    
+    // printFaceInLines(image, model);
+    // printFaceInTringles2D(image, model);
+
+    printFaceInTringles3D(image, model);
 
     image.flip_vertically(); // i want to have the origin at the left bottom corner of the image
     image.write_tga_file("output.tga");
