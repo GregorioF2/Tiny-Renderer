@@ -15,6 +15,10 @@ const TGAColor black = TGAColor(0, 0, 0 ,0);
 Model *model = NULL;
 const int width  = 800;
 const int height = 800;
+const int depth  = 255;
+Vec3f light_dir(0,0,-1);
+
+
 
 using namespace std;
 
@@ -162,19 +166,53 @@ void printFaceInTringles2D(TGAImage &image, Model* model) {
 }
 
 
+void test(char* filename) {
+    TGAImage image;
+    cout<< "file name: " << filename<< endl;
+    bool rightRead = image.read_tga_file("./obj/african_head/african_head_diffuse.tga");
+    if(!rightRead) {
+        cout << "Error al lee TGA image" << endl;
+        return;
+    }
+    image.write_tga_file("prueba.tga");
+
+}
+
 Vec3f world2screen(Vec3f v) {
     return Vec3f(int((v.x+1.)*width/2.+.5), int((v.y+1.)*height/2.+.5), v.z);
 }
+
 void printFaceInTringles3D(TGAImage &image, Model* model) {
     float *zbuffer = new float[width*height];
     for (int i=width*height; i--; zbuffer[i] = -std::numeric_limits<float>::max());
 
     for (int i=0; i<model->nfaces(); i++) {
         std::vector<int> face = model->face(i);
-        Vec3f pts[3];
-        for (int i=0; i<3; i++) pts[i] = world2screen(model->vert(face[i]));
-        triangle3D(pts[0], pts[1], pts[2], zbuffer, image, TGAColor(rand()%255, rand()%255, rand()%255, 255));
+
+         Vec3f screen_coords[3];
+        Vec3f world_coords[3];
+        for (int j=0; j<3; j++) {
+            Vec3f v = model->vert(face[j]);
+            screen_coords[j] = Vec3f((v.x+1.)*width/2., (v.y+1.)*height/2., (v.z+1.)*depth/2.);
+            world_coords[j]  = v;
+        }
+        Vec3f n = cross((world_coords[2]-world_coords[0]), (world_coords[1]-world_coords[0]));
+        n.normalize();
+        float intensity = n*light_dir;
+        if (intensity>0) {
+            triangle3D(screen_coords[0], screen_coords[1], screen_coords[2], zbuffer, image, TGAColor(intensity*255, intensity*255, intensity*255, 200));
+        }
     }
+
+    TGAImage zImage (width, height, TGAImage::RGB);
+    for(int i = 0; i < width; i++) {
+        for(int j = 0; j < height; j++) {
+            TGAColor c (zbuffer[i + j*width]*255, 1);
+            zImage.set(i, j, c);
+        }
+        zImage.write_tga_file("zbuffer.tga");
+    }
+     delete [] zbuffer;
 }
 
 int main(int argc, char** argv) {
@@ -183,6 +221,9 @@ int main(int argc, char** argv) {
     } else {
         model = new Model("obj/african_head/african_head.obj");
     }
+    
+    // test("test string");
+    
 
     TGAImage image(width, height, TGAImage::RGB);
     // triangle(Vec2i(0,0), Vec2i(100, 200), Vec2i(200, 100), image, white);
