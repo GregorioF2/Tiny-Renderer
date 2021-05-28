@@ -9,6 +9,7 @@
 #include <algorithm>
 #include "utils.h"
 
+
 const TGAColor white = TGAColor(255, 255, 255, 255);
 const TGAColor red   = TGAColor(255, 0,   0,   255);
 const TGAColor black = TGAColor(0, 0, 0 ,0);
@@ -17,10 +18,24 @@ const int width  = 800;
 const int height = 800;
 const int depth  = 255;
 Vec3f light_dir(0,0,-1);
+Vec3f camera(0,0,3);
 
 
 
 using namespace std;
+
+Vec3f m2v(Matrix m) {
+    return Vec3f(m[0][0]/m[3][0], m[1][0]/m[3][0], m[2][0]/m[3][0]);
+}
+
+Matrix v2m(Vec3f v) {
+    Matrix m(4, 1);
+    m[0][0] = v.x;
+    m[1][0] = v.y;
+    m[2][0] = v.z;
+    m[3][0] = 1.f;
+    return m;
+}
 
 void line(int x0, int y0, int x1, int y1, TGAImage &image, const TGAColor &color) {
     bool steep = false;
@@ -45,6 +60,7 @@ void line(int x0, int y0, int x1, int y1, TGAImage &image, const TGAColor &color
     }
 }
 
+/*
 Vec3f barycentric(Vec3f A, Vec3f B, Vec3f C, Vec2f P) {
     Vec3f s1 (C.x-A.x, B.x-A.x, A.x-P.x);
     Vec3f s2 (C.y-A.y, B.y-A.y, A.y-P.y);
@@ -57,7 +73,7 @@ Vec3f barycentric(Vec3f A, Vec3f B, Vec3f C, Vec2f P) {
 }
 
 
-void triangle3D(Vec3f v1, Vec3f v2, Vec3f v3, float *zbuffer, TGAImage &image, TGAColor color) {
+void triangle3DBaycentric(Vec3f v1, Vec3f v2, Vec3f v3, float *zbuffer, TGAImage &image, TGAColor color) {
     
     Vec2f bboxMin = Vec2f(
         min(v1.x, min(v2.x, v3.x)),
@@ -92,6 +108,7 @@ void triangle3D(Vec3f v1, Vec3f v2, Vec3f v3, float *zbuffer, TGAImage &image, T
     }
 
 }
+*/
 
 void triangle2D(Vec2i t0, Vec2i t1, Vec2i t2, TGAImage &image, const TGAColor &color) { 
     if (t0.y > t1.y) swap(t0, t1);
@@ -128,7 +145,74 @@ void triangle2D(Vec2i t0, Vec2i t1, Vec2i t2, TGAImage &image, const TGAColor &c
     }
 }
 
+void triangle3D(Vec3i t0, Vec3i t1, Vec3i t2, Vec2i uv0, Vec2i uv1, Vec2i uv2, TGAImage &image, float intensity, int *zbuffer) {
+    if (t0.y > t1.y) {
+        swap(t0, t1);
+        swap(uv0, uv1);
+    }
+    if (t0.y > t2.y) {
+        swap(t0, t2);
+        swap(uv0, uv2);
+    }
+    if (t1.y > t2.y) {
+        swap(t1, t2);
+        swap(uv1, uv2);
+    }
+    float totalHeight = t2.y - t0.y;
+    for (int i = 0; i<= totalHeight; i++) {
+        bool firstPart = i <= t1.y - t0.y;
+        float heightAlpha = totalHeight;
+        float heightBetha = firstPart
+            ? t1.y - t0.y
+            : t2.y - t1.y;
+        
+        heightAlpha = heightAlpha == 0 ? 1 : heightAlpha;
+        heightBetha = heightBetha == 0 ? 1 : heightBetha;
 
+        float advancedAlpha = i/heightAlpha;
+        float advancedBetha = firstPart
+            ? (float) i / heightBetha
+            : (float) (i - (t1.y - t0.y)) / heightBetha;
+
+        
+        Vec3i alpha = t0 + Vec3f(t2 - t0) * advancedAlpha;
+        Vec3i betha = firstPart
+            ? t0 + Vec3f(t1 - t0) * advancedBetha
+            : t1 + Vec3f(t2 - t1) * advancedBetha;
+        
+        Vec2i uvAlpha = uv0 + (uv2 - uv0)*advancedAlpha;
+        Vec2i uvBetha = firstPart
+            ? uv0 + (uv1 - uv0)*advancedBetha
+            : uv1 + (uv2 - uv1)*advancedBetha;
+
+        if (alpha.x > betha.x) {
+            swap(alpha, betha);
+            swap(uvAlpha, uvBetha);
+        }
+
+        float distance = betha.x - alpha.x;
+        for (int x = alpha.x; x <= betha.x; x++) {
+            float advanced = distance < 0.05 ? 1. : (x-alpha.x) / distance;
+
+
+            Vec3i point = Vec3f(alpha) + Vec3f(betha - alpha) * advanced;
+            Vec2i texturePoint = uvAlpha + (uvBetha - uvAlpha) * advanced;
+            
+            int xZindex = point.x;
+            int yZindex = point.y * width;
+
+            if (point.z < zbuffer[xZindex + yZindex]) continue;
+
+            zbuffer[xZindex + yZindex] = point.z;
+            
+            TGAColor color = model -> diffuse(texturePoint);
+            image.set(
+                point.x,
+                point.y,
+                TGAColor(color.r*intensity, color.g*intensity, color.b*intensity));
+        }
+    }
+}
 
 void printFaceInLines(TGAImage &image, Model* model) {
     for (int i=0; i<model->nfaces(); i++) {
@@ -145,63 +229,54 @@ void printFaceInLines(TGAImage &image, Model* model) {
     }
 }
 
-void printFaceInTringles2D(TGAImage &image, Model* model) {
-    Vec3f light_dir(0,0,-1);
-        for (int i=0; i<model->nfaces(); i++) { 
-        std::vector<int> face = model->face(i); 
-        Vec2i screen_coords[3]; 
-        Vec3f world_coords[3]; 
-        for (int j=0; j<3; j++) { 
-            Vec3f v = model->vert(face[j]); 
-            screen_coords[j] = Vec2i((v.x+1.)*width/2., (v.y+1.)*height/2.); 
-            world_coords[j]  = v; 
-        } 
-        Vec3f n;// = (world_coords[2]-world_coords[0])^(world_coords[1]-world_coords[0]); 
-        n.normalize(); 
-        float intensity = n*light_dir; 
-        if (intensity>0) { 
-            triangle2D(screen_coords[0], screen_coords[1], screen_coords[2], image, TGAColor(intensity*255, intensity*255, intensity*255, 255)); 
-        } 
-    }
-}
-
-
-void test(char* filename) {
-    TGAImage image;
-    cout<< "file name: " << filename<< endl;
-    bool rightRead = image.read_tga_file("./obj/african_head/african_head_diffuse.tga");
-    if(!rightRead) {
-        cout << "Error al lee TGA image" << endl;
-        return;
-    }
-    image.write_tga_file("prueba.tga");
-
-}
-
 Vec3f world2screen(Vec3f v) {
     return Vec3f(int((v.x+1.)*width/2.+.5), int((v.y+1.)*height/2.+.5), v.z);
 }
 
+Matrix viewport(int x, int y, int w, int h) {
+    Matrix m = Matrix::identity(4);
+    m[0][3] = x+w/2.f;
+    m[1][3] = y+h/2.f;
+    m[2][3] = depth/2.f;
+
+    m[0][0] = w/2.f;
+    m[1][1] = h/2.f;
+    m[2][2] = depth/2.f;
+    return m;
+}
+
 void printFaceInTringles3D(TGAImage &image, Model* model) {
-    float *zbuffer = new float[width*height];
-    for (int i=width*height; i--; zbuffer[i] = -std::numeric_limits<float>::max());
+    int *zbuffer = new int[width*height];
+    for (int i=width*height; i--; zbuffer[i] = -std::numeric_limits<int>::max());
 
-    for (int i=0; i<model->nfaces(); i++) {
-        std::vector<int> face = model->face(i);
+    Matrix Projection = Matrix::identity(4);
+    Matrix ViewPort   = viewport(width/8, height/8, width*3/4, height*3/4);
+    Projection[3][2] = -1.f/camera.z;
 
-         Vec3f screen_coords[3];
-        Vec3f world_coords[3];
-        for (int j=0; j<3; j++) {
-            Vec3f v = model->vert(face[j]);
-            screen_coords[j] = Vec3f((v.x+1.)*width/2., (v.y+1.)*height/2., (v.z+1.)*depth/2.);
-            world_coords[j]  = v;
+    for (int faceIndex=0; faceIndex<model->nfaces(); faceIndex++) {
+        std::vector<int> face = model->face(faceIndex);
+
+        Vec3f literalCoords [3];
+        literalCoords[0] = model->vert(face[0]);
+        literalCoords[1] = model->vert(face[1]);
+        literalCoords[2] = model->vert(face[2]);
+        
+        Vec3f coordsOnScreen[3];
+        coordsOnScreen[0] =  m2v(ViewPort*Projection*v2m(literalCoords[0]));
+        coordsOnScreen[1] =  m2v(ViewPort*Projection*v2m(literalCoords[1]));
+        coordsOnScreen[2] =  m2v(ViewPort*Projection*v2m(literalCoords[2]));
+
+        Vec3f normal = (literalCoords[2]-literalCoords[0])^(literalCoords[1]-literalCoords[0]);
+        normal.normalize();
+
+        float intensity = normal*light_dir;
+        if (intensity <= 0) continue;
+
+        Vec2i textures[3];
+        for (int k=0; k<3; k++) {
+            textures[k] = model->uv(faceIndex, k);
         }
-        Vec3f n = cross((world_coords[2]-world_coords[0]), (world_coords[1]-world_coords[0]));
-        n.normalize();
-        float intensity = n*light_dir;
-        if (intensity>0) {
-            triangle3D(screen_coords[0], screen_coords[1], screen_coords[2], zbuffer, image, TGAColor(intensity*255, intensity*255, intensity*255, 200));
-        }
+        triangle3D(coordsOnScreen[0], coordsOnScreen[1], coordsOnScreen[2], textures[0], textures[1], textures[2], image, intensity, zbuffer);
     }
 
     TGAImage zImage (width, height, TGAImage::RGB);
@@ -210,8 +285,9 @@ void printFaceInTringles3D(TGAImage &image, Model* model) {
             TGAColor c (zbuffer[i + j*width]*255, 1);
             zImage.set(i, j, c);
         }
-        zImage.write_tga_file("zbuffer.tga");
     }
+    zImage.flip_vertically();
+    zImage.write_tga_file("zbuffer.tga");
      delete [] zbuffer;
 }
 
